@@ -37,3 +37,30 @@ sudo apt install ros-humble-gazebo-ros-pkgs
 ```bash
 sudo apt install ros-humble-turtlebot3*
 ```
+Установите модель робота (экспорт в каждый терминал перед запуском): 
+```bash
+export TURTLEBOT3_MODEL=burger
+```
+
+## ** 4. Опционально: slam_toolbox (для продвинутого SLAM) 
+```bash
+sudo apt install ros-humble-slam-toolbox```
+``` 
+
+## ** 5. Опционально: Nav2 (для сравнения со стандартным навигационным стеком) 
+```bash
+sudo apt install ros-humble-navigation2 ros-humble-nav2-bringup
+```
+
+ # `Сборка проекта`
+
+ ```bash
+mkdir -p ~/ros2_ws/src
+cd ~/ros2_ws/src
+git clone https://github.com/Yazan-pyth/ros2_navigation_project.git
+cd ~/ros2_ws
+colcon build --packages-select ros2_navigation_project
+source install/setup.bash
+```
+
+## **🎮 Запуск и управление**
