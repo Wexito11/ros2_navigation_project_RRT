@@ -27,12 +27,12 @@ ros2 --version
 echo $ROS_DISTRO   # должно быть humble 
 ```
 
-## ** 2. Gazebo:
+## **2. Gazebo:**
 ```bash
 sudo apt install ros-humble-gazebo-ros-pkgs
 ```
 
-## ** 3. TurtleBot3 симуляция 
+## **3. TurtleBot3 симуляция** 
 
 ```bash
 sudo apt install ros-humble-turtlebot3*
@@ -42,17 +42,17 @@ sudo apt install ros-humble-turtlebot3*
 export TURTLEBOT3_MODEL=burger
 ```
 
-## ** 4. Опционально: slam_toolbox (для продвинутого SLAM) 
+## **4. Опционально: slam_toolbox (для продвинутого SLAM)** 
 ```bash
 sudo apt install ros-humble-slam-toolbox```
 ``` 
 
-## ** 5. Опционально: Nav2 (для сравнения со стандартным навигационным стеком) 
+## **5. Опционально: Nav2 (для сравнения со стандартным навигационным стеком)** 
 ```bash
 sudo apt install ros-humble-navigation2 ros-humble-nav2-bringup
 ```
 
- # `Сборка проекта`
+ # **Сборка проекта**
 
  ```bash
 mkdir -p ~/ros2_ws/src
@@ -65,20 +65,20 @@ source install/setup.bash
 
 ## **🎮 Запуск и управление**
 
-## ** Терминал 1 – Gazebo с роботом ** 
+## **Терминал 1 – Gazebo с роботом** 
 ```bash
 export TURTLEBOT3_MODEL=burger
 ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
 ```
 
-## ** Терминал 2 – узел навигации **
+## **Терминал 2 – узел навигации**
 ```bash
 cd ~/ros2_ws
 source install/setup.bash
 ros2 run ros2_navigation_project global_planner_node
 ```
 
-## ** Терминал 3 – RViz для визуализации и управления **
+## **Терминал 3 – RViz для визуализации и управления**
 ```bash
 ros2 run rviz2 rviz2
 ```
