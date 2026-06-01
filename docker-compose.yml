@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  simulator:
+    image: osrf/ros:jazzy-desktop
+    environment:
+      - TURTLEBOT3_MODEL=waffle
+      - DISPLAY=${DISPLAY}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    network_mode: host
+    command: bash -c "source /opt/ros/jazzy/setup.bash && export TURTLEBOT3_MODEL=waffle && ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py"
+
+  navigation:
+    build: .
+    network_mode: host
+    depends_on:
+      - simulator
+    command: bash -c "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && sleep 10 && ros2 run ros2_navigation_project global_planner_node"
