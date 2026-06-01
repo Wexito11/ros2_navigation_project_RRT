@@ -14,10 +14,13 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 
 add_executable(global_planner_node src/planner_node.cpp)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 target_include_directories(global_planner_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_compile_features(global_planner_node PUBLIC c_std_99 cxx_std_17)
+target_compile_options(global_planner_node PRIVATE -std=c++17)
 ament_target_dependencies(global_planner_node
   rclcpp
   geometry_msgs

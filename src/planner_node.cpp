@@ -5,6 +5,7 @@
 #include <vector>
 #include <chrono>
 #include <mutex>
+#include <random>
 
 // ========================== A* структуры ==========================
 struct AStarNode {
@@ -19,9 +20,15 @@ struct CompareAStar {
   bool operator()(const AStarNode* a, const AStarNode* b) { return a->f() > b->f(); }
 };
 
+
+struct RRTNode {
+  double x, y; int parent;
+  RRTNode(double _x, double _y, int _p=-1) : x(_x), y(_y), parent(_p) {}
+};
+
 // ========================== Конструктор / деструктор ==========================
 GlobalPlannerNode::GlobalPlannerNode()
-: Node("global_planner_node"), goal_received_(false), map_initialized_(false), map_initial_cleared_(false)
+: Node("global_planner_node"), goal_received_(false), map_initialized_(false), map_initial_cleared_(false), odom_received_(false)
 {
   current_x_ = current_y_ = current_yaw_ = 0.0;
   goal_x_ = goal_y_ = 0.0;
@@ -35,7 +42,7 @@ GlobalPlannerNode::GlobalPlannerNode()
     "/goal_pose", 10, std::bind(&GlobalPlannerNode::goalCallback, this, std::placeholders::_1));
 
   // Издатели
-  cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+  cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel", 10);
   map_pub_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>("/map", 1);
   path_pub_ = this->create_publisher<nav_msgs::msg::Path>("/global_plan", 1);
 
@@ -66,6 +73,7 @@ GlobalPlannerNode::~GlobalPlannerNode() {}
 // ========================== Callbacks ==========================
 void GlobalPlannerNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
+  odom_received_ = true;
   current_x_ = msg->pose.pose.position.x;
   current_y_ = msg->pose.pose.position.y;
   double siny_cosp = 2.0 * (msg->pose.pose.orientation.w * msg->pose.pose.orientation.z +
@@ -105,18 +113,35 @@ void GlobalPlannerNode::goalCallback(const geometry_msgs::msg::PoseStamped::Shar
 {
   goal_x_ = msg->pose.position.x;
   goal_y_ = msg->pose.position.y;
-  goal_received_ = true;
-  RCLCPP_INFO(this->get_logger(), "New goal: (%.2f, %.2f). Planning A*...", goal_x_, goal_y_);
   global_plan_.clear();
-  if (map_initialized_) {
-    if (planAStar(current_x_, current_y_, goal_x_, goal_y_, global_plan_)) {
-      RCLCPP_INFO(this->get_logger(), "A* path found (%zu points)", global_plan_.size());
+  
+  // Сбрасываем карту полностью при новой цели
+  {
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    std::fill(global_map_.data.begin(), global_map_.data.end(), -1);
+    // Очищаем зону вокруг робота
+    int cx, cy; worldToMap(current_x_, current_y_, cx, cy);
+    int r = static_cast<int>(1.5/map_resolution_);
+    for(int i=-r;i<=r;++i) for(int j=-r;j<=r;++j){
+      int nx=cx+i,ny=cy+j;
+      if(nx>=0&&nx<map_width_&&ny>=0&&ny<map_height_)
+        global_map_.data[ny*map_width_+nx]=0;
+    }
+  }
+  
+  RCLCPP_INFO(this->get_logger(),"New goal: (%.2f, %.2f). Map reset. Planning RRT...", goal_x_, goal_y_);
+  if(map_initialized_){
+    if(planRRT(current_x_, current_y_, goal_x_, goal_y_, global_plan_)){
+      goal_received_ = true;
+      RCLCPP_INFO(this->get_logger(),"RRT path found (%zu points)", global_plan_.size());
       publishPath();
     } else {
-      RCLCPP_WARN(this->get_logger(), "No path to goal!");
+      goal_received_ = false;
+      RCLCPP_WARN(this->get_logger(),"No path found! Try another spot.");
     }
   }
 }
+
 
 // ========================== Инициализация карты ==========================
 void GlobalPlannerNode::initMap()
@@ -157,7 +182,7 @@ bool GlobalPlannerNode::isFree(int mx, int my) const
   if (mx<0 || mx>=map_width_ || my<0 || my>=map_height_) return false;
   int val = global_map_.data[my * map_width_ + mx];
   // 0 = свободно, -1 = неизвестно (считаем проходимым для планирования)
-  return (val == 0 || val == -1);
+  return (val != 100 && val != 99);
 }
 
 // ===== Динамическое построение карты из лидара =====
@@ -180,7 +205,14 @@ void GlobalPlannerNode::updateMapWithLaser(const sensor_msgs::msg::LaserScan::Sh
     int mx, my;
     worldToMap(wx, wy, mx, my);
     if (mx>=0 && mx<map_width_ && my>=0 && my<map_height_) {
-      global_map_.data[my * map_width_ + mx] = 100; // занято
+      global_map_.data[my * map_width_ + mx] = 100;
+      // Раздуваем препятствие на 3 клетки (15 см)
+      int inflate = 3;
+      for(int ii=-inflate;ii<=inflate;++ii) for(int jj=-inflate;jj<=inflate;++jj){
+        int imx=mx+ii, imy=my+jj;
+        if(imx>=0&&imx<map_width_&&imy>=0&&imy<map_height_&&global_map_.data[imy*map_width_+imx]!=100)
+          global_map_.data[imy*map_width_+imx]=99;
+      }
     }
     
     // Закрашиваем свободное пространство вдоль луча
@@ -201,6 +233,42 @@ void GlobalPlannerNode::updateMapWithLaser(const sensor_msgs::msg::LaserScan::Sh
   }
 }
 
+// ========================== RRT ==========================
+bool GlobalPlannerNode::planRRT(double start_x, double start_y, double goal_x, double goal_y,
+                                std::deque<std::pair<double,double>> &path)
+{
+  std::lock_guard<std::mutex> lock(map_mutex_);
+  const int MAX_ITER=9000; const double STEP=0.3, THRESH=0.35, BIAS=0.15;
+  const double mw=map_width_*map_resolution_, mh=map_height_*map_resolution_;
+  std::mt19937 rng(std::random_device{}());
+  std::uniform_real_distribution<double> rx(map_origin_x_,map_origin_x_+mw);
+  std::uniform_real_distribution<double> ry(map_origin_y_,map_origin_y_+mh);
+  std::uniform_real_distribution<double> rb(0.0,1.0);
+  int smx,smy; worldToMap(start_x,start_y,smx,smy);
+  for(int i=-10;i<=10;++i) for(int j=-10;j<=10;++j){int cx=smx+i,cy=smy+j;if(cx>=0&&cx<map_width_&&cy>=0&&cy<map_height_)global_map_.data[cy*map_width_+cx]=0;}
+  int gmx,gmy; worldToMap(goal_x,goal_y,gmx,gmy);
+  for(int i=-8;i<=8;++i) for(int j=-8;j<=8;++j){int cx=gmx+i,cy=gmy+j;if(cx>=0&&cx<map_width_&&cy>=0&&cy<map_height_&&global_map_.data[cy*map_width_+cx]!=100)global_map_.data[cy*map_width_+cx]=0;}
+  std::vector<RRTNode> tree; tree.reserve(MAX_ITER); tree.emplace_back(start_x,start_y,-1);
+  for(int iter=0;iter<MAX_ITER;++iter){
+    double qx,qy; if(rb(rng)<BIAS){qx=goal_x;qy=goal_y;}else{qx=rx(rng);qy=ry(rng);}
+    int near=0; double md=std::hypot(tree[0].x-qx,tree[0].y-qy);
+    for(int i=1;i<(int)tree.size();++i){double d=std::hypot(tree[i].x-qx,tree[i].y-qy);if(d<md){md=d;near=i;}}
+    double dx=qx-tree[near].x,dy=qy-tree[near].y,d=std::hypot(dx,dy); if(d<1e-6)continue;
+    double nx=tree[near].x+(dx/d)*STEP, ny=tree[near].y+(dy/d)*STEP;
+    int nmx,nmy; worldToMap(nx,ny,nmx,nmy); if(!isFree(nmx,nmy))continue;
+    bool col=false; int st=std::max(2,(int)(STEP/map_resolution_));
+    for(int s=1;s<=st;++s){double fx=tree[near].x+(dx/d)*STEP*s/st,fy=tree[near].y+(dy/d)*STEP*s/st;int fmx,fmy;worldToMap(fx,fy,fmx,fmy);if(!isFree(fmx,fmy)){col=true;break;}}
+    if(col)continue;
+    tree.emplace_back(nx,ny,near); int ni=tree.size()-1;
+    if(std::hypot(nx-goal_x,ny-goal_y)<THRESH){
+      int cur=ni; while(cur!=-1){path.push_front({tree[cur].x,tree[cur].y});cur=tree[cur].parent;}
+      path.push_back({goal_x,goal_y});
+      RCLCPP_INFO(get_logger(),"RRT: path in %d iters",iter); return true;
+    }
+  }
+  RCLCPP_WARN(get_logger(),"RRT: no path after %d iters",MAX_ITER); return false;
+}
+
 // ========================== A* глобальный ==========================
 bool GlobalPlannerNode::planAStar(double start_x, double start_y, double goal_x, double goal_y,
                                   std::deque<std::pair<double,double>> &path)
@@ -213,8 +281,8 @@ bool GlobalPlannerNode::planAStar(double start_x, double start_y, double goal_x,
   int goal_val = global_map_.data[gmy * map_width_ + gmx];
   RCLCPP_INFO(get_logger(), "Start (%d,%d)=%d, Goal (%d,%d)=%d", smx, smy, start_val, gmx, gmy, goal_val);
   
-  if (!isFree(gmx, gmy)) {
-    RCLCPP_WARN(get_logger(), "Goal cell not free (value=%d)", goal_val);
+  if (global_map_.data[gmy * map_width_ + gmx] == 100) {
+    RCLCPP_WARN(get_logger(), "Goal cell is obstacle");
     return false;
   }
   if (!isFree(smx, smy)) {
@@ -360,21 +428,20 @@ void GlobalPlannerNode::purePursuitControl(double &linear, double &angular)
 
 void GlobalPlannerNode::publishVelocity(double linear, double angular)
 {
-  geometry_msgs::msg::Twist cmd;
-  cmd.linear.x = linear;
-  cmd.angular.z = angular;
+  geometry_msgs::msg::TwistStamped cmd;
+  cmd.header.stamp = this->now();
+  cmd.header.frame_id = "base_link";
+  cmd.twist.linear.x = linear;
+  cmd.twist.angular.z = angular;
   cmd_vel_pub_->publish(cmd);
 }
 
 void GlobalPlannerNode::controlLoop()
 {
-  static bool warned = false;
-  if (std::abs(current_x_) < 0.01 && std::abs(current_y_) < 0.01 && !warned) {
+  if (!odom_received_) {
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 3000, "Waiting for odometry...");
-    warned = true;
     return;
   }
-  warned = false;
 
   if (!goal_received_) {
     publishVelocity(0.0, 0.0);
@@ -395,7 +462,7 @@ void GlobalPlannerNode::controlLoop()
   }
 
   if (global_plan_.empty() && map_initialized_) {
-    if (planAStar(current_x_, current_y_, goal_x_, goal_y_, global_plan_)) {
+    if (planRRT(current_x_, current_y_, goal_x_, goal_y_, global_plan_)) {
       publishPath();
     } else {
       RCLCPP_WARN(get_logger(), "Replanning failed");

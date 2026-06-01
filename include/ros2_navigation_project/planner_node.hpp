@@ -3,6 +3,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -24,7 +25,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
-  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_pub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr map_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::TimerBase::SharedPtr control_timer_;
@@ -35,6 +36,7 @@ private:
   std::vector<float> scan_ranges_;
   double goal_x_, goal_y_;
   bool goal_received_;
+  bool odom_received_ = false;
   std::mutex map_mutex_;
   
 
@@ -65,6 +67,9 @@ private:
   // Глобальный A*
   bool planAStar(double start_x, double start_y, double goal_x, double goal_y,
                  std::deque<std::pair<double,double>> &path);
+
+  bool planRRT(double start_x, double start_y, double goal_x, double goal_y,
+                std::deque<std::pair<double,double>> &path);
 
   // Локальный планировщик (Pure Pursuit)
   void purePursuitControl(double &linear, double &angular);
