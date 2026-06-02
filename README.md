@@ -110,6 +110,9 @@ docker-compose down
 
 ## Запуск без Docker
 
+pkill -f gz; pkill -f gazebo; pkill -f global_planner; pkill -f rviz2
+sleep 3
+
 ### Требования
 
 ```bash
