@@ -1,19 +1,33 @@
 version: '3.8'
 
 services:
+  # Simulator — Gazebo + TurtleBot3
   simulator:
     image: osrf/ros:jazzy-desktop
     environment:
-      - TURTLEBOT3_MODEL=waffle
       - DISPLAY=${DISPLAY}
+      - TURTLEBOT3_MODEL=waffle
+      - ROS_DOMAIN_ID=0
     volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
     network_mode: host
-    command: bash -c "source /opt/ros/jazzy/setup.bash && export TURTLEBOT3_MODEL=waffle && ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py"
+    command: >
+      bash -c "apt-get update -qq &&
+               apt-get install -y -qq ros-jazzy-turtlebot3-gazebo ros-jazzy-ros-gz-sim ros-jazzy-ros-gz-bridge &&
+               source /opt/ros/jazzy/setup.bash &&
+               export TURTLEBOT3_MODEL=waffle &&
+               ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py"
 
+  # Navigation node — our RRT planner
   navigation:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - ROS_DOMAIN_ID=0
     network_mode: host
     depends_on:
       - simulator
-    command: bash -c "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && sleep 10 && ros2 run ros2_navigation_project global_planner_node"
+    command: >
+      bash -c "sleep 15 &&
+               ros2 run ros2_navigation_project global_planner_node"
